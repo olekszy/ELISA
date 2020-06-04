@@ -6,6 +6,8 @@ import numpy.random as npr
 import matplotlib.pyplot as plt
 from scipy.optimize import leastsq
 from scipy.interpolate import interp1d
+from pick import pick
+from tabulate import tabulate
 
 platetemplate = sys.argv[1] #Read template of plate
 csv = sys.argv[2] #Read csv file from reader
@@ -15,7 +17,6 @@ csv = sys.argv[2] #Read csv file from reader
 #wells = pd.read_csv("../Plateorder.csv", sep = ";", index_col=0) #read wells 
 
 template = pd.read_csv(platetemplate, sep = ";", index_col=0) # Read sample sheet
-
 
 def import1d(x):
     df = pd.read_csv(x, sep = ';', index_col=0)
@@ -97,7 +98,7 @@ def readsample(temp,df,S):
         value.append(df.at[x,y]) #fill list with extracted values of samples
         avgvalue = np.mean(value) #count averages of repetitions
     return value, avgvalue.item()
-def xsamples(temp,df):
+def xsamples(temp,df,popt):
     results = pd.DataFrame({"Sample":[], "Concentration":[]}) #create new dataframe
     samplelist = np.unique(temp.iloc[:].values) #extract sample names
     for i in samplelist: #loop over sample names extracted before
@@ -119,77 +120,95 @@ def ODbyELISA(results):
         lista.append(x)
     results["ELISA units"] = lista #create column from list
     return results
+def omitstandards(standards,measured,diluted):
+    title = 'Please choose Standards to omit'
+    options = standards
+    option, index = pick(options, title)
+    selected = pick(options, title, multiselect=True, min_selection_count=0)
+    f = standards.index(selected[0][0])
+    standards.remove(selected[0][0])
+    y = np.delete(measured,f)
+    x = np.delete(diluted,f)
+    print ("Omiting " + str(selected[0][0]))
+    return f, y, x
 ##################################PROGRAM STARTS HERE#################################################
 #csv = "IgA_29-05-2020__prot_S1_spec_plytka6_B.csv" #CSV from Reader
-df450 = cuttable(csv, "450") #Cut 450 nm table
-df570 = cuttable(csv, "570") #Cut 570 nm table
-print("Properly imported plates")
-#Background substraction 
-dfavg  = df450.sub(df570) #Cut background
-print("Plates substracted")
-#Read Standards 
-standards = [] # Create standards
-countstandards = int(input("How many standards did you use")) #input number of standards
+def analysis(csv,platetemplate):   
+    print(csv)
+    df450 = cuttable(csv, "(450)") #Cut 450 nm table
+    df570 = cuttable(csv, "(570)") #Cut 570 nm table
+    print("Properly imported plates")
+    #Background substraction 
+    dfavg  = df450.sub(df570) #Cut background
+    print("Plates substracted")
+    #Read Standards 
+    standards = [] # Create standards
+    countstandards = int(input("How many standards did you use")) #input number of standards
 
-for i in range(1,countstandards+1):
-    x = str(i)+"Standard"
-    standards.append(x)# append list of S1..S2.. etc
-np.unique(standards.append("B"))
+    for i in range(1,countstandards+1):
+        x = str(i)+"Standard"
+        standards.append(x)# append list of S1..S2.. etc
+    np.unique(standards.append("B"))
 
-##### Define Concentrations
-value = input("Starting Concentration") #Input number of standards
- #Input Dilution factor
-dil = float(input("Dilution factor")) #Change to float
+    ##### Define Concentrations
+    value = input("Starting Concentration") #Input number of standards
+    #Input Dilution factor
+    dil = float(input("Dilution factor")) #Change to float
 
-list = [] # create list
-list.append(value) #Add starting value
+    list = [] # create list
+    list.append(value) #Add starting value
 
-for i in range(countstandards-1):
-    value = float(value)/dil #Create series for standarization
-    list.append(value) # append series values
-list.append(0)
-a = np.asarray(list) # save as array
-a = np.loadtxt(a, dtype='float') #delete dtype at the end
-x = a
-print("Standards created")
-col = []
+    for i in range(countstandards-1):
+        value = float(value)/dil #Create series for standarization
+        list.append(value) # append series values
+    list.append(0)
+    a = np.asarray(list) # save as array
+    a = np.loadtxt(a, dtype='float') #delete dtype at the end
+    x = a
+    print("Standards created")
+    col = []
 
-for i in standards:   
-    z,avg = readsample(template, dfavg, i)
-    col.append(avg)
-col = np.asarray(col)
-#Attach Standards OD
-y = col
+    for i in standards:   
+        z,avg = readsample(template, dfavg, i)
+        col.append(avg)
+    col = np.asarray(col)
+    #Attach Standards OD
+    y = col
 
-x=a #crucial!!!!!!!
-print("Standards attached")
-print(x)
-from scipy.optimize import curve_fit
-popt, pcov = curve_fit(logistic4, x, y)
-y_true = logistic4(x, *popt)
+    x=a #crucial!!!!!!!
+    print("Standards attached")
+    print(x)
 
-f = interp1d(x, y_true)
-f2 = interp1d(x, y_true, kind='cubic')
+    null, y, x = omitstandards(standards,col,a)
 
-xnew = np.linspace(min(x), max(x))
+    from scipy.optimize import curve_fit
+    popt, pcov = curve_fit(logistic4, x, y)
+    y_true = logistic4(x, *popt)
 
-print("ABCD paramteres completed")
+    f = interp1d(x, y_true)
+    f2 = interp1d(x, y_true, kind='cubic')
 
-plt.plot(x, y, 'o', xnew, f(xnew), '-', xnew, f2(xnew), '--')
-plt.title(csv+" "+"4PL curve", fontdict=None, loc='center', pad=None)
-plt.legend(['data', 'linear', 'cubic'], loc='best')
-plt.xlabel("Concentration")
-plt.ylabel("OD")
-print("R2 value" +" "+ str(r2value(y, y_true)))
+    xnew = np.linspace(min(x), max(x))
 
-print("Saving results to files")
-filename = csv.split("/")[-1]
-print(filename[0:-4])
+    print("ABCD paramteres completed")
 
-plt.savefig(filename[0:-4])
+    plt.plot(x, y, 'o', xnew, f(xnew), '-', xnew, f2(xnew), '--')
+    plt.title(csv+" "+"4PL curve", fontdict=None, loc='center', pad=None)
+    plt.legend(['data', 'linear', 'cubic'], loc='best')
+    plt.xlabel("Concentration")
+    plt.ylabel("OD")
+    print("R2 value" +" "+ str(r2value(y, y_true)))
 
-results = xsamples(template,dfavg)
+    print("Saving results to files")
+    filename = csv.split("/")[-1]
+    print(filename[0:-4])
 
-final = ODbyELISA(results)
+    plt.savefig(filename[0:-4])
 
-final.to_csv(csv[0:-4]+"_final", sep = ";", header = True)
+    results = xsamples(template,dfavg,popt)
+    print(tabulate(results, headers='keys', tablefmt='psql'))
+    final = ODbyELISA(results)
+
+    final.to_csv(csv[0:-4]+"_final.csv", sep = ";", header = True)
+
+analysis(csv,platetemplate)
