@@ -9,15 +9,8 @@ from scipy.interpolate import interp1d
 from pick import pick
 from tabulate import tabulate
 
-platetemplate = sys.argv[1] #Read template of plate
-csv = sys.argv[2] #Read csv file from reader
-
-#dir = os.chdir(workspace)
-
-#wells = pd.read_csv("../Plateorder.csv", sep = ";", index_col=0) #read wells 
-
-template = pd.read_csv(platetemplate, sep = ";", index_col=0) # Read sample sheet
-
+#platetemplate = sys.argv[1] #Read template of plate
+#csv = sys.argv[2] #Read csv file from reader
 def import1d(x):
     df = pd.read_csv(x, sep = ';', index_col=0)
     out = np.empty(df.shape[0], dtype=object)
@@ -34,7 +27,6 @@ def calcc(y):
         z = np.absolute(i-const)
         a.append(z)
     return min(a)
-#Develop 4pl curve
 
 def calcC(y):
     return np.median(y)
@@ -123,17 +115,20 @@ def ODbyELISA(results):
 def omitstandards(standards,measured,diluted):
     title = 'Please choose Standards to omit'
     options = standards
-    option, index = pick(options, title)
     selected = pick(options, title, multiselect=True, min_selection_count=0)
-    f = standards.index(selected[0][0])
-    standards.remove(selected[0][0])
-    y = np.delete(measured,f)
-    x = np.delete(diluted,f)
-    print ("Omiting " + str(selected[0][0]))
-    return f, y, x
-##################################PROGRAM STARTS HERE#################################################
-#csv = "IgA_29-05-2020__prot_S1_spec_plytka6_B.csv" #CSV from Reader
-def analysis(csv,platetemplate):   
+    try:
+        print(selected)
+        f = standards.index(selected[0][0])
+        standards.remove(selected[0][0])
+        y = np.delete(measured,f)
+        x = np.delete(diluted,f)
+        print ("Omiting " + str(selected[0][0]))
+        return f, y, x 
+    except IndexError:
+        return standards, measured, diluted
+################################## PROGRAM STARTS HERE #################################################
+def analysis(csv,platetemplate): 
+    template = pd.read_csv(platetemplate, sep = ";", index_col=0) # Read sample sheets  
     print(csv)
     df450 = cuttable(csv, "(450)") #Cut 450 nm table
     df570 = cuttable(csv, "(570)") #Cut 570 nm table
@@ -143,7 +138,7 @@ def analysis(csv,platetemplate):
     print("Plates substracted")
     #Read Standards 
     standards = [] # Create standards
-    countstandards = int(input("How many standards did you use")) #input number of standards
+    countstandards = int(input("How many standards did you use ")) #input number of standards
 
     for i in range(1,countstandards+1):
         x = str(i)+"Standard"
@@ -151,9 +146,9 @@ def analysis(csv,platetemplate):
     np.unique(standards.append("B"))
 
     ##### Define Concentrations
-    value = input("Starting Concentration") #Input number of standards
+    value = input("Starting Concentration ") #Input number of standards
     #Input Dilution factor
-    dil = float(input("Dilution factor")) #Change to float
+    dil = float(input("Dilution factor ")) #Change to float
 
     list = [] # create list
     list.append(value) #Add starting value
@@ -192,23 +187,71 @@ def analysis(csv,platetemplate):
 
     print("ABCD paramteres completed")
 
+    # Create plot and save it 
+    #Firstly, check if results folder exists
+    import os
+    if os.path.isdir("results") == False:
+        os.makedirs('results')
+    
     plt.plot(x, y, 'o', xnew, f(xnew), '-', xnew, f2(xnew), '--')
     plt.title(csv+" "+"4PL curve", fontdict=None, loc='center', pad=None)
     plt.legend(['data', 'linear', 'cubic'], loc='best')
     plt.xlabel("Concentration")
     plt.ylabel("OD")
-    print("R2 value" +" "+ str(r2value(y, y_true)))
+    print("Image created")
+    print(y.dtype)
+    print(y_true.dtype)
+    r = r2value(y, y_true)
+    print("R value counted")
+    r2valuestr = str(r)
+    print("Rvalue modfied to string")
+    print("R2 value " + r2valuestr)
 
     print("Saving results to files")
     filename = csv.split("/")[-1]
     print(filename[0:-4])
 
-    plt.savefig(filename[0:-4])
+    plt.savefig("results/"+filename[0:-4])
 
     results = xsamples(template,dfavg,popt)
-    print(tabulate(results, headers='keys', tablefmt='psql'))
     final = ODbyELISA(results)
 
-    final.to_csv(csv[0:-4]+"_final.csv", sep = ";", header = True)
+    return final, r
 
-analysis(csv,platetemplate)
+from os import listdir
+from os.path import isfile, join
+
+workdir = "workfolder"
+sheets = "samplesheets"
+samples = [f for f in listdir(workdir) if isfile(join(workdir, f))] #find folders for samples
+
+templates = [f for f in listdir(sheets) if isfile(join(sheets, f))] #find folders for templates
+title = 'Please choose files to analyse'
+
+option, index = pick(samples, title)
+chosensamples = pick(samples, title, multiselect=True, min_selection_count=0)
+
+print (chosensamples)
+
+samplelist = []
+for samples in chosensamples:
+    title = "Attach template to " + str(samples[0])
+    sheet, index = pick(templates, title)
+    print(sheet +" attached to " + str(samples[0]))
+    samplelist.append(samples[0]+":"+sheet)
+
+finalresults = pd.DataFrame()
+for sample in samplelist:
+    csv,platetemplate = sample.split(":")
+    csv = workdir+"/"+csv
+    platetemplate = sheets+"/"+platetemplate 
+    print("Start analysis" + csv + " with template " + platetemplate)
+    final, r2 = analysis(csv,platetemplate)
+    final["R^2"] = round(r2,4)
+    print(tabulate(final, headers='keys', tablefmt='psql'))
+    finalresults = finalresults.append(final)
+
+name = input("How to save your analysis?")
+finalresults = finalresults[~finalresults['Sample'].isin(['Standard', "B", "no antigen"])]
+#print(finalresults)
+finalresults.to_csv("results/"+name+".csv", sep = "\t")
