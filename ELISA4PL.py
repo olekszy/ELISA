@@ -2,13 +2,11 @@ import sys
 import pandas as pd
 import glob,os
 import numpy as np
-import numpy.random as npr
 import matplotlib.pyplot as plt
 from scipy.optimize import leastsq
 from scipy.interpolate import interp1d
 from pick import pick
 from tabulate import tabulate
-
 #platetemplate = sys.argv[1] #Read template of plate
 #csv = sys.argv[2] #Read csv file from reader
 def import1d(x):
@@ -59,22 +57,11 @@ def cuttable(x, wave):
     table = table.drop(columns=table.columns[(table == '').any()])
     table = table.apply(lambda x: x.str.replace(',','.'))
     return table.astype("float")
-
 def r2value(y, y_predicted):
     ss_res = np.sum((y - y_predicted) ** 2)
     ss_tot = np.sum((y - np.mean(y)) ** 2)
     r2 = 1 - (ss_res / ss_tot)
     return r2
-def rsqtable(x, y):
-    pd.DataFrame(columns = ["x", "y", "y - yavg", "(y-yavg)^2", "ypred", "ypred - yavg", "(ypred-yavg)^2"])
-    rsq["x"] = x
-    rsq["y"] = y
-    yavg = y.mean()
-    rsq["y - yavg"] = rsq["y"] - yavg
-    rsq["(y-yavg)^2"] = rsq["y - yavg"]**2
-    rsq["ypred"] = y_true
-    rsq["ypred - yavg"] = rsq["ypred"] - yavg
-    rsq["(ypred-yavg)^2"] = rsq["ypred - yavg"]**2
 def readsample(temp,df,S):
     z = []
     #Read Standards 
@@ -88,15 +75,36 @@ def readsample(temp,df,S):
         x = i[0] # take rows
         y = int(i[2:]) # take column
         value.append(df.at[x,y]) #fill list with extracted values of samples
+        print (value) 
         avgvalue = np.mean(value) #count averages of repetitions
     return value, avgvalue.item()
 def xsamples(temp,df,popt):
-    results = pd.DataFrame({"Sample":[], "Concentration":[]}) #create new dataframe
+    results = pd.DataFrame({"Sample":[], "Concentration":[], "QC":[]}) #create new dataframe
     samplelist = np.unique(temp.iloc[:].values) #extract sample names
     for i in samplelist: #loop over sample names extracted before
+        s = 1
         a,b = readsample(temp, df, i) #Read samples from template
+        lenght = len(a)
+        mean = np.mean(a) #count mean value from repetitions
+        #part with std errors
+        threshold = mean*0.25 #threshold assigned as 25%
+        diffplus = mean + threshold 
+        diffminus = mean - threshold
+        for m in a: #for loop to check if value is in 25% range 
+            if not (diffminus <= m <= diffplus):
+                qc = "SD" #QC not passed
+                break
+            else:
+                qc = "PASSED"
+        #appending pd
         z = concentration(b, *popt.tolist()) #Calculate concentration from 4PL Curve
-        temporary = pd.DataFrame({"Sample":[i], "Concentration":[z.real]}) #create temporary table for better appending
+        temporary = pd.DataFrame({"Sample":[i], "Concentration":[z.real],"QC":[qc]}) #create temporary table for better appending
+        for reads in a: #append reads to csv in appropriate columns
+            while s > lenght:
+                break
+            temporary["read"+str(s)] = round(reads, 3) #round results to three places after ,
+            print("added" + "read"+str(s))
+            s = s+1
         #print(temporary) #Check
         results = results.append(temporary, ignore_index=True) #append results to table
         #print(z) #Check
@@ -112,22 +120,32 @@ def ODbyELISA(results):
         lista.append(x)
     results["ELISA units"] = lista #create column from list
     return results
-def omitstandards(standards,measured,diluted):
-    title = 'Please choose Standards to omit'
+def omitstandards(standards,measured,diluted,name):
+    title = 'Please choose Standards to omit in ' + name
     options = standards
     selected = pick(options, title, multiselect=True, min_selection_count=0)
     try:
         print(selected)
         f = standards.index(selected[0][0])
         standards.remove(selected[0][0])
-        y = np.delete(measured,f)
-        x = np.delete(diluted,f)
+        y = np.delete(measured,f) #Delete measrure
+        x = np.delete(diluted,f) #Delete diluted
         print ("Omiting " + str(selected[0][0]))
         return f, y, x 
     except IndexError:
         return standards, measured, diluted
+def createimage(x,y,xnew,f,f2,r2valuestr):
+        fig = plt.figure()
+        plt.plot(x, y, 'o', xnew, f(xnew), '-', xnew, f2(xnew), '--')
+        plt.title(csv+" "+"4PL curve", fontdict=None, loc='center', pad=None)
+        plt.legend(['data', 'linear', 'cubic'], loc='best')
+        plt.xlabel("Concentration")
+        plt.ylabel("OD")
+        #plt.text(2, 0.65,"R2 value " + r2valuestr , fontdict=font)
+        return fig
+
 ################################## PROGRAM STARTS HERE #################################################
-def analysis(csv,platetemplate): 
+def analysis(csv,platetemplate, standardsnumber,value,dil,filename): 
     template = pd.read_csv(platetemplate, sep = ";", index_col=0) # Read sample sheets  
     print(csv)
     df450 = cuttable(csv, "(450)") #Cut 450 nm table
@@ -138,17 +156,17 @@ def analysis(csv,platetemplate):
     print("Plates substracted")
     #Read Standards 
     standards = [] # Create standards
-    countstandards = int(input("How many standards did you use ")) #input number of standards
+    #countstandards = int(input("How many standards did you use ")) #input number of standards
 
-    for i in range(1,countstandards+1):
+    for i in range(1,standardsnumber+1):
         x = str(i)+"Standard"
         standards.append(x)# append list of S1..S2.. etc
     np.unique(standards.append("B"))
 
     ##### Define Concentrations
-    value = input("Starting Concentration ") #Input number of standards
+    #value = input("Starting Concentration ") #Input number of standards
     #Input Dilution factor
-    dil = float(input("Dilution factor ")) #Change to float
+    #dil = float(input("Dilution factor ")) #Change to float
 
     list = [] # create list
     list.append(value) #Add starting value
@@ -172,9 +190,9 @@ def analysis(csv,platetemplate):
 
     x=a #crucial!!!!!!!
     print("Standards attached")
-    print(x)
+    #print(x)
 
-    null, y, x = omitstandards(standards,col,a)
+    null, y, x = omitstandards(standards,col,a, filename)
 
     from scipy.optimize import curve_fit
     popt, pcov = curve_fit(logistic4, x, y)
@@ -192,26 +210,20 @@ def analysis(csv,platetemplate):
     import os
     if os.path.isdir("results") == False:
         os.makedirs('results')
-    
-    plt.plot(x, y, 'o', xnew, f(xnew), '-', xnew, f2(xnew), '--')
-    plt.title(csv+" "+"4PL curve", fontdict=None, loc='center', pad=None)
-    plt.legend(['data', 'linear', 'cubic'], loc='best')
-    plt.xlabel("Concentration")
-    plt.ylabel("OD")
-    print("Image created")
-    print(y.dtype)
-    print(y_true.dtype)
     r = r2value(y, y_true)
-    print("R value counted")
     r2valuestr = str(r)
-    print("Rvalue modfied to string")
+    
+    z = createimage(x, y, xnew,f,f2,r2valuestr)
+    
+    print("Image created")
+    
     print("R2 value " + r2valuestr)
 
     print("Saving results to files")
     filename = csv.split("/")[-1]
     print(filename[0:-4])
 
-    plt.savefig("results/"+filename[0:-4])
+    z.savefig("results/"+filename[0:-4])
 
     results = xsamples(template,dfavg,popt)
     final = ODbyELISA(results)
@@ -228,7 +240,7 @@ samples = [f for f in listdir(workdir) if isfile(join(workdir, f))] #find folder
 templates = [f for f in listdir(sheets) if isfile(join(sheets, f))] #find folders for templates
 title = 'Please choose files to analyse'
 
-option, index = pick(samples, title)
+#option, index = pick(samples, title)
 chosensamples = pick(samples, title, multiselect=True, min_selection_count=0)
 
 print (chosensamples)
@@ -241,17 +253,26 @@ for samples in chosensamples:
     samplelist.append(samples[0]+":"+sheet)
 
 finalresults = pd.DataFrame()
+standards = [] # Create standards
+countstandards = int(input("How many standards did you use ")) #input number of standards
+
+##### Define Concentrations
+value = input("Starting Concentration ") #Input number of standards
+#Input Dilution factor
+dil = float(input("Dilution factor ")) #Change to float
+
 for sample in samplelist:
     csv,platetemplate = sample.split(":")
     csv = workdir+"/"+csv
-    platetemplate = sheets+"/"+platetemplate 
+    platetemplate = sheets+"/"+platetemplate
+    fn = str(csv) 
     print("Start analysis" + csv + " with template " + platetemplate)
-    final, r2 = analysis(csv,platetemplate)
+    final, r2 = analysis(csv,platetemplate,countstandards,value,dil,fn)
     final["R^2"] = round(r2,4)
     print(tabulate(final, headers='keys', tablefmt='psql'))
     finalresults = finalresults.append(final)
 
 name = input("How to save your analysis?")
-finalresults = finalresults[~finalresults['Sample'].isin(['Standard', "B", "no antigen"])]
+finalresults = finalresults[~finalresults['Sample'].isin(["B", "no antigen"])]
 #print(finalresults)
 finalresults.to_csv("results/"+name+".csv", sep = "\t")
